@@ -1,0 +1,122 @@
+import os
+import io
+import joblib
+import numpy as np
+import pandas as pd
+from datetime import datetime
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
+from typing import List
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "..", "models", "pv_degradation_model.pkl")
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+
+app = FastAPI(title="Solar PV SaaS API", version="2.3.0")
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+MODELS = None
+EVENT_LOG = []
+LAST_LOG_TIME = 0 # Prevents log spam
+
+@app.on_event("startup")
+def load_models():
+    global MODELS
+    if os.path.exists(MODEL_PATH):
+        MODELS = joblib.load(MODEL_PATH)
+        print(f"[OK] Loaded models for strings: {list(MODELS.keys())}")
+    else:
+        print("[WARN] Model not found. Run train_model.py first.")
+
+class Reading(BaseModel):
+    string_id: int = Field(1, ge=1, le=2)
+    voltage: float
+    current: float
+    irradiance: float
+    temperature: float
+
+def build_features(v, i, irr, t):
+    power = v * i
+    pr = power / (irr + 1e-6)
+    res = v / (i + 1e-6)
+    return np.array([[v, i, irr, t, power, pr, res]], dtype=float)
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard(request: Request):
+    return templates.TemplateResponse(request=request, name="index.html")
+
+@app.get("/api/logs")
+def get_logs():
+    return JSONResponse(EVENT_LOG[::-1])
+
+@app.post("/api/predict")
+def predict(reading: Reading):
+    global LAST_LOG_TIME
+    if MODELS is None: raise HTTPException(status_code=503, detail="Model not loaded")
+    
+    model = MODELS[f"s{reading.string_id}"]
+    X = build_features(reading.voltage, reading.current, reading.irradiance, reading.temperature)
+    prob = float(model.predict_proba(X)[0][1])
+    
+    # Force trigger if voltage is below 10 (simulating the fault drop)
+    label = "Degraded" if (prob >= 0.4 or reading.voltage < 10.0) else "Normal"
+    
+    if label == "Degraded":
+        current_time = datetime.now().timestamp()
+        # Only log once every 2 seconds so the UI doesn't freeze
+        if current_time - LAST_LOG_TIME > 2.0:
+            LAST_LOG_TIME = current_time
+            EVENT_LOG.append({
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "string_id": reading.string_id,
+                "status": label,
+                "voltage": round(reading.voltage, 2)
+            })
+
+    return {"status": label, "confidence": prob, "prob_degraded": prob}
+
+@app.post("/api/stream")
+async def stream_csv(string_id: int = 1, file: UploadFile = File(...)):
+    contents = await file.read()
+    df = pd.read_csv(io.BytesIO(contents), sep=";")
+    
+    V_col, I_col, T_col, label_col = f"V{string_id}", f"I{string_id}", f"T{string_id}", f"Label_S{string_id}"
+    df = df[df[label_col].isin(["Normal", "Degradation"])].reset_index(drop=True)
+    
+    model = MODELS[f"s{string_id}"]
+    X = pd.DataFrame({V_col: df[V_col], I_col: df[I_col], "Irr": df["Irr"], T_col: df[T_col]})
+    X["Power"] = X[V_col] * X[I_col]
+    X["PerformanceRatio"] = X["Power"] / (X["Irr"] + 1e-6)
+    X["Resistance"] = X[V_col] / (X[I_col] + 1e-6)
+    X = X[[V_col, I_col, "Irr", T_col, "Power", "PerformanceRatio", "Resistance"]]
+
+    predicted = model.predict(X).astype(int)
+    actual = (df[label_col] == "Degradation").astype(int).values
+
+    n_normal = int((actual == 0).sum())
+    false_alarms = int(((predicted == 1) & (actual == 0)).sum())
+    far = (false_alarms / n_normal * 100) if n_normal else 0.0
+
+    first_fault_idx = next((i for i, a in enumerate(actual) if a == 1), None)
+    detected, delay_rows = False, None
+    if first_fault_idx is not None:
+        consecutive = 0
+        for i in range(first_fault_idx, len(predicted)):
+            if predicted[i] == 1:
+                consecutive += 1
+                if consecutive >= 3: 
+                    delay_rows = int(i - first_fault_idx)
+                    detected = True
+                    break
+            else: consecutive = 0
+
+    delay_seconds = (delay_rows * 60) if delay_rows is not None else None
+
+    return {
+        "false_alarm_rate_pct": round(far, 4),
+        "detected": detected,
+        "detection_delay_seconds": delay_seconds,
+        "persistence_threshold_rows": 3
+    }

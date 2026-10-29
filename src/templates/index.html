@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SolarSense | Enterprise PV Monitoring</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root { --bg: #f8fafc; --sidebar: #0f172a; --primary: #3b82f6; --text: #1e293b; --border: #e2e8f0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
+    body { display: flex; height: 100vh; background: var(--bg); overflow: hidden; }
+    
+    .sidebar { width: 250px; background: var(--sidebar); color: white; display: flex; flex-direction: column; }
+    .logo { padding: 1.5rem; font-size: 1.25rem; font-weight: 700; border-bottom: 1px solid #1e293b; display: flex; align-items: center; gap: 0.5rem; }
+    .nav-item { padding: 1rem 1.5rem; color: #94a3b8; cursor: pointer; transition: 0.2s; font-weight: 500; }
+    .nav-item:hover, .nav-item.active { background: #1e293b; color: white; border-left: 4px solid var(--primary); }
+    
+    .main { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
+    .header { background: white; padding: 1rem 2rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .content { padding: 2rem; display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; }
+    
+    .card { background: white; border-radius: 8px; border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 1.5rem; }
+    .card h2 { font-size: 1.1rem; margin-bottom: 1rem; color: var(--text); }
+    
+    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    .kpi { background: white; padding: 1rem; border-radius: 8px; border: 1px solid var(--border); }
+    .kpi-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 600; }
+    .kpi-val { font-size: 1.5rem; font-weight: 700; margin-top: 0.5rem; color: var(--text); }
+    
+    .chart-container { position: relative; height: 300px; width: 100%; }
+    
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th { text-align: left; padding: 0.75rem; border-bottom: 2px solid var(--border); color: #64748b; font-weight: 600; }
+    td { padding: 0.75rem; border-bottom: 1px solid var(--border); }
+    .badge-danger { background: #fee2e2; color: #991b1b; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    
+    input, select, button { width: 100%; padding: 0.6rem; margin-bottom: 1rem; border: 1px solid #cbd5e1; border-radius: 6px; }
+    button { background: var(--primary); color: white; border: none; font-weight: 600; cursor: pointer; }
+    button:hover { background: #2563eb; }
+    .btn-sim { background: #f59e0b; }
+    .btn-sim:hover { background: #d97706; }
+  </style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="logo">☀️ SolarSense</div>
+  <div class="nav-item active">Dashboard</div>
+  <div class="nav-item">System Health</div>
+  <div class="nav-item">Fault Logs</div>
+  <div class="nav-item">Settings</div>
+</div>
+
+<div class="main">
+  <div class="header">
+    <h2>PV Array Overview</h2>
+    <div style="font-size: 0.9rem; font-weight: 500; color: #10b981;">● API Online</div>
+  </div>
+
+  <div class="content">
+    <div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="kpi-title">False Alarm Rate</div><div class="kpi-val" id="ui_far" style="color: #10b981;">--</div></div>
+        <div class="kpi"><div class="kpi-title">Detection Delay</div><div class="kpi-val" id="ui_delay">--</div></div>
+        <div class="kpi"><div class="kpi-title">Persistence Check</div><div class="kpi-val" id="ui_persist">--</div></div>
+      </div>
+      
+      <div class="card">
+        <h2>Live Power Generation (Watts)</h2>
+        <div class="chart-container">
+          <canvas id="liveChart"></canvas>
+        </div>
+        <button class="btn-sim" id="simulateBtn" style="margin-top: 1rem;">▶ Simulate Live Stream</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <h2>Model Evaluation</h2>
+        <form id="streamForm">
+          <select id="stream_string_id"><option value="1">String 1</option><option value="2">String 2</option></select>
+          <input id="csvFile" type="file" accept=".csv" required>
+          <button type="submit" id="evalBtn">Run Bulk CSV Test</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Event History Log</h2>
+        <table id="logTable">
+          <thead><tr><th>Time</th><th>String</th><th>Voltage</th><th>Event</th></tr></thead>
+          <tbody id="logBody">
+            <tr><td colspan="4" style="text-align:center; color:#94a3b8;">No faults logged yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ctx = document.getElementById('liveChart').getContext('2d');
+let myChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ label: 'Power (W)', data: [], borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.1)', fill: true, tension: 0.4, pointRadius: 0 }] },
+    options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { beginAtZero: true } } }
+});
+
+// Auto-poll the backend for new logs every 1 second (Like a real SaaS app)
+setInterval(loadLogs, 1000);
+
+document.getElementById('simulateBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('simulateBtn');
+    btn.disabled = true; btn.textContent = "Streaming Data...";
+    myChart.data.labels = []; myChart.data.datasets[0].data = [];
+    myChart.data.datasets[0].borderColor = '#3b82f6'; myChart.data.datasets[0].backgroundColor = 'rgba(59, 130, 246, 0.1)';
+    
+    let v = 18.5, i = 8.2, irr = 900, temp = 45;
+    
+    for (let step = 0; step < 50; step++) {
+        if (step === 25) { v = v * 0.2; irr = irr * 0.8; } 
+        
+        let v_noise = v + (Math.random() * 0.2 - 0.1);
+        let power = v_noise * i;
+        
+        myChart.data.labels.push(step);
+        myChart.data.datasets[0].data.push(power);
+        myChart.update();
+        
+        await fetch('/api/predict', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ string_id: 1, voltage: v_noise, current: i, irradiance: irr, temperature: temp })
+        });
+        
+        if (step === 25) {
+            myChart.data.datasets[0].borderColor = '#ef4444'; 
+            myChart.data.datasets[0].backgroundColor = 'rgba(239, 68, 68, 0.1)';
+        }
+        await new Promise(r => setTimeout(r, 50));
+    }
+    btn.disabled = false; btn.textContent = "▶ Simulate Live Stream";
+});
+
+async function loadLogs() {
+    const res = await fetch('/api/logs');
+    const logs = await res.json();
+    const tbody = document.getElementById('logBody');
+    
+    if (logs.length === 0) return;
+    
+    const recentLogs = logs.slice(0, 5);
+    
+    tbody.innerHTML = recentLogs.map(l => `
+        <tr>
+            <td>${l.timestamp}</td>
+            <td>String ${l.string_id}</td>
+            <td>${l.voltage} V</td>
+            <td><span class="badge-danger">DEGRADED</span></td>
+        </tr>
+    `).join('');
+}
+
+document.getElementById('streamForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('evalBtn'); btn.textContent = "Processing...";
+    const fd = new FormData(); fd.append("file", document.getElementById('csvFile').files[0]);
+    const res = await fetch(`/api/stream?string_id=${document.getElementById('stream_string_id').value}`, { method: "POST", body: fd });
+    const data = await res.json();
+    
+    document.getElementById('ui_far').textContent = `${data.false_alarm_rate_pct}%`;
+    document.getElementById('ui_delay').textContent = data.detected ? `${data.detection_delay_seconds} sec` : "None";
+    document.getElementById('ui_persist').textContent = `${data.persistence_threshold_rows} rows`;
+    btn.textContent = "Run Bulk CSV Test";
+});
+</script>
+</body>
+</html>
