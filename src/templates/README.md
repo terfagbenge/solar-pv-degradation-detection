@@ -16,5 +16,5 @@ An end-to-end Machine Learning web application that detects progressive degradat
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/solar-pv-degradation-detection.git
+   git clone https://github.com/terfagbenge/solar-pv-degradation-detection.git
    cd solar-pv-degradation-detection
