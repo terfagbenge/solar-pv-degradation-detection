@@ -8,27 +8,25 @@ from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from typing import List
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "..", "models", "pv_degradation_model.pkl")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
-app = FastAPI(title="Solar PV SaaS API", version="2.3.0")
+app = FastAPI(title="Solar & Battery Fault Detection System")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 MODELS = None
-EVENT_LOG = []
-LAST_LOG_TIME = 0 # Prevents log spam
+EVENT_LOG = [] # Acts as our Fault Events Database
+CONSECUTIVE_FAULTS = 0 # For the Live Persistence Check
+PERSISTENCE_THRESHOLD = 3
 
 @app.on_event("startup")
 def load_models():
     global MODELS
     if os.path.exists(MODEL_PATH):
         MODELS = joblib.load(MODEL_PATH)
-        print(f"[OK] Loaded models for strings: {list(MODELS.keys())}")
-    else:
-        print("[WARN] Model not found. Run train_model.py first.")
+        print(f"[OK] Loaded ML model.")
 
 class Reading(BaseModel):
     string_id: int = Field(1, ge=1, le=2)
@@ -36,6 +34,9 @@ class Reading(BaseModel):
     current: float
     irradiance: float
     temperature: float
+    battery_voltage: float
+    battery_current: float
+    battery_temp: float
 
 def build_features(v, i, irr, t):
     power = v * i
@@ -53,29 +54,53 @@ def get_logs():
 
 @app.post("/api/predict")
 def predict(reading: Reading):
-    global LAST_LOG_TIME
+    global CONSECUTIVE_FAULTS
     if MODELS is None: raise HTTPException(status_code=503, detail="Model not loaded")
     
+    # 1. Solar ML Prediction
     model = MODELS[f"s{reading.string_id}"]
     X = build_features(reading.voltage, reading.current, reading.irradiance, reading.temperature)
     prob = float(model.predict_proba(X)[0][1])
+    ml_status = "Degraded" if prob >= 0.4 else "Normal"
     
-    # Force trigger if voltage is below 10 (simulating the fault drop)
-    label = "Degraded" if (prob >= 0.4 or reading.voltage < 10.0) else "Normal"
+    # 2. Battery Threshold Rules (Chapter 1 Objective 3)
+    battery_status = "Normal"
+    if reading.battery_voltage < 10.5:
+        battery_status = "Fault (Low Voltage)"
+    elif reading.battery_temp > 55.0:
+        battery_status = "Fault (Overheating)"
+        
+    # 3. Persistence Check Logic (Chapter 1 Objective 5)
+    is_abnormal = (ml_status == "Degraded" or battery_status != "Normal")
     
-    if label == "Degraded":
-        current_time = datetime.now().timestamp()
-        # Only log once every 2 seconds so the UI doesn't freeze
-        if current_time - LAST_LOG_TIME > 2.0:
-            LAST_LOG_TIME = current_time
+    if is_abnormal:
+        CONSECUTIVE_FAULTS += 1
+    else:
+        CONSECUTIVE_FAULTS = 0 # Reset if normal
+        
+    confirmed_fault = False
+    if CONSECUTIVE_FAULTS >= PERSISTENCE_THRESHOLD:
+        confirmed_fault = True
+        
+        # Log to Database if it's a newly confirmed fault
+        if not EVENT_LOG or EVENT_LOG[-1].get("timestamp") != datetime.now().strftime("%H:%M:%S"):
             EVENT_LOG.append({
                 "timestamp": datetime.now().strftime("%H:%M:%S"),
                 "string_id": reading.string_id,
-                "status": label,
-                "voltage": round(reading.voltage, 2)
+                "status": "Confirmed Fault",
+                "ml_status": ml_status,
+                "battery_status": battery_status,
+                "voltage": round(reading.voltage, 2),
+                "battery_v": round(reading.battery_voltage, 2)
             })
 
-    return {"status": label, "confidence": prob, "prob_degraded": prob}
+    return {
+        "ml_status": ml_status, 
+        "battery_status": battery_status,
+        "confirmed_fault": confirmed_fault,
+        "consecutive": CONSECUTIVE_FAULTS,
+        "prob_degraded": prob
+    }
 
 @app.post("/api/stream")
 async def stream_csv(string_id: int = 1, file: UploadFile = File(...)):

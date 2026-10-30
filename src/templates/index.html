@@ -2,42 +2,52 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>SolarSense | Enterprise PV Monitoring</title>
+  <title>SolarSense | Solar & Battery Monitoring</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root { --bg: #f8fafc; --sidebar: #0f172a; --primary: #3b82f6; --text: #1e293b; --border: #e2e8f0; }
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
     body { display: flex; height: 100vh; background: var(--bg); overflow: hidden; }
     
+    /* Sidebar */
     .sidebar { width: 250px; background: var(--sidebar); color: white; display: flex; flex-direction: column; }
     .logo { padding: 1.5rem; font-size: 1.25rem; font-weight: 700; border-bottom: 1px solid #1e293b; display: flex; align-items: center; gap: 0.5rem; }
-    .nav-item { padding: 1rem 1.5rem; color: #94a3b8; cursor: pointer; transition: 0.2s; font-weight: 500; }
-    .nav-item:hover, .nav-item.active { background: #1e293b; color: white; border-left: 4px solid var(--primary); }
+    .nav-item { padding: 1rem 1.5rem; color: #94a3b8; cursor: pointer; font-weight: 500; }
+    .nav-item.active { background: #1e293b; color: white; border-left: 4px solid var(--primary); }
     
+    /* Main Content */
     .main { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
     .header { background: white; padding: 1rem 2rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
     .content { padding: 2rem; display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; }
     
+    /* Alarm Banner */
+    .alarm-banner { background: #ef4444; color: white; padding: 1rem; text-align: center; font-weight: 700; font-size: 1.2rem; display: none; animation: flash 1s infinite; margin-bottom: 1.5rem; border-radius: 8px;}
+    @keyframes flash { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+
+    /* Cards */
     .card { background: white; border-radius: 8px; border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.05); padding: 1.5rem; }
     .card h2 { font-size: 1.1rem; margin-bottom: 1rem; color: var(--text); }
     
+    /* KPIs */
     .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
     .kpi { background: white; padding: 1rem; border-radius: 8px; border: 1px solid var(--border); }
     .kpi-title { font-size: 0.75rem; color: #64748b; text-transform: uppercase; font-weight: 600; }
     .kpi-val { font-size: 1.5rem; font-weight: 700; margin-top: 0.5rem; color: var(--text); }
     
-    .chart-container { position: relative; height: 300px; width: 100%; }
+    .chart-container { position: relative; height: 250px; width: 100%; }
     
-    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
     th { text-align: left; padding: 0.75rem; border-bottom: 2px solid var(--border); color: #64748b; font-weight: 600; }
     td { padding: 0.75rem; border-bottom: 1px solid var(--border); }
     .badge-danger { background: #fee2e2; color: #991b1b; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
     
-    input, select, button { width: 100%; padding: 0.6rem; margin-bottom: 1rem; border: 1px solid #cbd5e1; border-radius: 6px; }
-    button { background: var(--primary); color: white; border: none; font-weight: 600; cursor: pointer; }
+    input, select, button { width: 100%; padding: 0.5rem; margin-bottom: 0.5rem; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem;}
+    button { background: var(--primary); color: white; border: none; font-weight: 600; cursor: pointer; margin-top: 0.5rem;}
     button:hover { background: #2563eb; }
-    .btn-sim { background: #f59e0b; }
+    .btn-sim { background: #f59e0b; padding: 0.75rem; font-size: 1rem;}
     .btn-sim:hover { background: #d97706; }
+    
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
   </style>
 </head>
 <body>
@@ -52,12 +62,17 @@
 
 <div class="main">
   <div class="header">
-    <h2>PV Array Overview</h2>
+    <h2>Solar & Battery System Overview</h2>
     <div style="font-size: 0.9rem; font-weight: 500; color: #10b981;">● API Online</div>
   </div>
 
   <div class="content">
     <div>
+      <!-- THE ALARM BANNER -->
+      <div id="alarmBanner" class="alarm-banner">
+        ⚠️ CONFIRMED FAULT DETECTED: SYSTEM SHUTDOWN RECOMMENDED ⚠️
+      </div>
+
       <div class="kpi-grid">
         <div class="kpi"><div class="kpi-title">False Alarm Rate</div><div class="kpi-val" id="ui_far" style="color: #10b981;">--</div></div>
         <div class="kpi"><div class="kpi-title">Detection Delay</div><div class="kpi-val" id="ui_delay">--</div></div>
@@ -69,7 +84,7 @@
         <div class="chart-container">
           <canvas id="liveChart"></canvas>
         </div>
-        <button class="btn-sim" id="simulateBtn" style="margin-top: 1rem;">▶ Simulate Live Stream</button>
+        <button class="btn-sim" id="simulateBtn">▶ Simulate Live Stream (Solar + Battery)</button>
       </div>
     </div>
 
@@ -84,11 +99,11 @@
       </div>
 
       <div class="card">
-        <h2>Event History Log</h2>
+        <h2>Fault Event Log</h2>
         <table id="logTable">
-          <thead><tr><th>Time</th><th>String</th><th>Voltage</th><th>Event</th></tr></thead>
+          <thead><tr><th>Time</th><th>Solar Status</th><th>Battery Status</th></tr></thead>
           <tbody id="logBody">
-            <tr><td colspan="4" style="text-align:center; color:#94a3b8;">No faults logged yet</td></tr>
+            <tr><td colspan="3" style="text-align:center; color:#94a3b8;">No confirmed faults logged yet</td></tr>
           </tbody>
         </table>
       </div>
@@ -104,19 +119,26 @@ let myChart = new Chart(ctx, {
     options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { beginAtZero: true } } }
 });
 
-// Auto-poll the backend for new logs every 1 second (Like a real SaaS app)
 setInterval(loadLogs, 1000);
 
 document.getElementById('simulateBtn').addEventListener('click', async () => {
     const btn = document.getElementById('simulateBtn');
+    const alarm = document.getElementById('alarmBanner');
     btn.disabled = true; btn.textContent = "Streaming Data...";
+    alarm.style.display = "none";
     myChart.data.labels = []; myChart.data.datasets[0].data = [];
     myChart.data.datasets[0].borderColor = '#3b82f6'; myChart.data.datasets[0].backgroundColor = 'rgba(59, 130, 246, 0.1)';
     
     let v = 18.5, i = 8.2, irr = 900, temp = 45;
+    let bat_v = 12.8, bat_i = 2.0, bat_temp = 30.0;
     
     for (let step = 0; step < 50; step++) {
-        if (step === 25) { v = v * 0.2; irr = irr * 0.8; } 
+        // At step 25, inject BOTH a solar degradation AND a battery low-voltage fault
+        if (step === 25) { 
+            v = v * 0.2; irr = irr * 0.8; 
+            bat_v = 9.5; // Battery drops below 10.5V threshold
+            bat_temp = 60.0; // Battery overheats
+        } 
         
         let v_noise = v + (Math.random() * 0.2 - 0.1);
         let power = v_noise * i;
@@ -125,35 +147,37 @@ document.getElementById('simulateBtn').addEventListener('click', async () => {
         myChart.data.datasets[0].data.push(power);
         myChart.update();
         
-        await fetch('/api/predict', {
+        const res = await fetch('/api/predict', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ string_id: 1, voltage: v_noise, current: i, irradiance: irr, temperature: temp })
+            body: JSON.stringify({ 
+                string_id: 1, voltage: v_noise, current: i, irradiance: irr, temperature: temp,
+                battery_voltage: bat_v, battery_current: bat_i, battery_temp: bat_temp 
+            })
         });
+        const data = await res.json();
         
-        if (step === 25) {
+        // If persistence check passes, trigger the Alarm Banner!
+        if (data.confirmed_fault) {
             myChart.data.datasets[0].borderColor = '#ef4444'; 
             myChart.data.datasets[0].backgroundColor = 'rgba(239, 68, 68, 0.1)';
+            alarm.style.display = "block";
         }
         await new Promise(r => setTimeout(r, 50));
     }
-    btn.disabled = false; btn.textContent = "▶ Simulate Live Stream";
+    btn.disabled = false; btn.textContent = "▶ Simulate Live Stream (Solar + Battery)";
 });
 
 async function loadLogs() {
     const res = await fetch('/api/logs');
     const logs = await res.json();
     const tbody = document.getElementById('logBody');
-    
     if (logs.length === 0) return;
     
-    const recentLogs = logs.slice(0, 5);
-    
-    tbody.innerHTML = recentLogs.map(l => `
+    tbody.innerHTML = logs.slice(0, 5).map(l => `
         <tr>
             <td>${l.timestamp}</td>
-            <td>String ${l.string_id}</td>
-            <td>${l.voltage} V</td>
-            <td><span class="badge-danger">DEGRADED</span></td>
+            <td><span class="badge-danger">${l.ml_status}</span></td>
+            <td><span class="badge-danger">${l.battery_status}</span></td>
         </tr>
     `).join('');
 }
